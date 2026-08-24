@@ -32,6 +32,15 @@ Imath::V3f routeColor(std::size_t routeIndex) {
     return colors[routeIndex % colors.size()];
 }
 
+Imath::V3f persistentRouteColor(std::size_t routeIndex) {
+    const std::array<Imath::V3f, 3> colors{
+        Imath::V3f(0.72f, 0.38f, 1.0f),
+        Imath::V3f(0.2f, 0.62f, 1.0f),
+        Imath::V3f(1.0f, 0.46f, 0.18f),
+    };
+    return colors[routeIndex % colors.size()];
+}
+
 void drawRibbon(
     const std::vector<Imath::V3f>& points,
     const Imath::V3f& color,
@@ -182,6 +191,9 @@ void HexPuzzleRenderer::render(
     configureView();
     drawTiles();
 
+    const std::vector<ConnectedRoute> persistentRoutes = board_.longRoutes();
+    drawConnectedRoutes(persistentRoutes, true);
+
     std::vector<ConnectedRoute> connectedRoutes;
     std::size_t routeTileCount = 0;
     if (selectedTile.has_value()) {
@@ -195,11 +207,16 @@ void HexPuzzleRenderer::render(
                 }
             }
         }
-        drawConnectedRoutes(connectedRoutes);
+        drawConnectedRoutes(connectedRoutes, false);
         drawSelection(*selectedTile);
         drawConnections(*selectedTile);
     }
-    drawHud(selectedTile, connectedRoutes, routeTileCount, sequenceRepeating);
+    drawHud(
+        selectedTile,
+        connectedRoutes,
+        routeTileCount,
+        persistentRoutes.size(),
+        sequenceRepeating);
     glutSwapBuffers();
 }
 
@@ -304,7 +321,8 @@ void HexPuzzleRenderer::drawPathRibbon(
 }
 
 void HexPuzzleRenderer::drawConnectedRoutes(
-    const std::vector<ConnectedRoute>& routes) const {
+    const std::vector<ConnectedRoute>& routes,
+    bool persistent) const {
     if (routes.empty()) {
         return;
     }
@@ -314,20 +332,44 @@ void HexPuzzleRenderer::drawConnectedRoutes(
     glDepthFunc(GL_LEQUAL);
 
     for (std::size_t routeIndex = 0; routeIndex < routes.size(); ++routeIndex) {
-        const Imath::V3f color = routeColor(routeIndex);
+        const Imath::V3f color = persistent ?
+            persistentRouteColor(routeIndex) :
+            routeColor(routeIndex);
+        const float glowOffset = persistent ? 1.16f : 1.19f;
+        const float coreOffset = persistent ? 1.185f : 1.235f;
         for (const RouteSegment& segment : routes[routeIndex]) {
             const PuzzleTile& tile = board_.tile(segment.tileId);
             const ConnectorPath& path = tile.paths().at(segment.pathIndex);
-            drawPathRibbon(tile, path, 1.19f, color, 0.22f, 13.0f);
+            drawPathRibbon(
+                tile,
+                path,
+                glowOffset,
+                color,
+                persistent ? 0.14f : 0.22f,
+                persistent ? 9.0f : 13.0f);
 
-            const Imath::V3f first = sideAnchor(tile, path.firstSide, 1.235f, 0.1f);
-            const Imath::V3f second = sideAnchor(tile, path.secondSide, 1.235f, 0.1f);
-            drawPathRibbon(tile, path, 1.235f, Imath::V3f(0.01f, 0.02f, 0.03f), 0.95f, 8.5f);
-            drawPathRibbon(tile, path, 1.235f, color, 1.0f, 4.5f);
-            drawSurfaceDisc(first, tile.center(), 0.105f, Imath::V3f(0.01f, 0.02f, 0.03f), 1.0f);
-            drawSurfaceDisc(second, tile.center(), 0.105f, Imath::V3f(0.01f, 0.02f, 0.03f), 1.0f);
-            drawSurfaceDisc(first, tile.center(), 0.06f, color, 1.0f);
-            drawSurfaceDisc(second, tile.center(), 0.06f, color, 1.0f);
+            const Imath::V3f first = sideAnchor(tile, path.firstSide, coreOffset, 0.1f);
+            const Imath::V3f second = sideAnchor(tile, path.secondSide, coreOffset, 0.1f);
+            drawPathRibbon(
+                tile,
+                path,
+                coreOffset,
+                Imath::V3f(0.01f, 0.02f, 0.03f),
+                persistent ? 0.82f : 0.95f,
+                persistent ? 6.5f : 8.5f);
+            drawPathRibbon(
+                tile,
+                path,
+                coreOffset,
+                color,
+                persistent ? 0.78f : 1.0f,
+                persistent ? 3.0f : 4.5f);
+            const float casingRadius = persistent ? 0.075f : 0.105f;
+            const float coreRadius = persistent ? 0.04f : 0.06f;
+            drawSurfaceDisc(first, tile.center(), casingRadius, Imath::V3f(0.01f, 0.02f, 0.03f), 1.0f);
+            drawSurfaceDisc(second, tile.center(), casingRadius, Imath::V3f(0.01f, 0.02f, 0.03f), 1.0f);
+            drawSurfaceDisc(first, tile.center(), coreRadius, color, persistent ? 0.78f : 1.0f);
+            drawSurfaceDisc(second, tile.center(), coreRadius, color, persistent ? 0.78f : 1.0f);
         }
 
         for (const RouteSegment& segment : routes[routeIndex]) {
@@ -351,37 +393,40 @@ void HexPuzzleRenderer::drawConnectedRoutes(
                 }
                 const std::size_t adjacentSide =
                     static_cast<std::size_t>(reciprocal - adjacent.neighbors().begin());
-                const Imath::V3f currentAnchor = sideAnchor(current, side, 1.3f, 0.1f);
-                const Imath::V3f adjacentAnchor = sideAnchor(adjacent, adjacentSide, 1.3f, 0.1f);
+                const float bridgeOffset = persistent ? 1.22f : 1.3f;
+                const Imath::V3f currentAnchor = sideAnchor(current, side, bridgeOffset, 0.1f);
+                const Imath::V3f adjacentAnchor = sideAnchor(adjacent, adjacentSide, bridgeOffset, 0.1f);
                 const Imath::V3f edgeCenter =
                     normalized((currentAnchor + adjacentAnchor) * 0.5f) *
-                    (HexPlanet::radius + 1.3f);
+                    (HexPlanet::radius + bridgeOffset);
                 drawBridgeLine(
                     currentAnchor,
                     edgeCenter,
                     adjacentAnchor,
                     Imath::V3f(0.035f, 0.03f, 0.01f),
-                    0.95f,
-                    11.0f);
+                    persistent ? 0.78f : 0.95f,
+                    persistent ? 7.5f : 11.0f);
                 drawBridgeLine(
                     currentAnchor,
                     edgeCenter,
                     adjacentAnchor,
-                    Imath::V3f(1.0f, 0.82f, 0.12f),
-                    1.0f,
-                    4.5f);
+                    persistent ? color : Imath::V3f(1.0f, 0.82f, 0.12f),
+                    persistent ? 0.78f : 1.0f,
+                    persistent ? 3.0f : 4.5f);
+                const Imath::V3f bridgeColor =
+                    persistent ? color : Imath::V3f(1.0f, 0.82f, 0.12f);
                 drawSurfaceDisc(
                     currentAnchor,
                     current.center(),
-                    0.075f,
-                    Imath::V3f(1.0f, 0.82f, 0.12f),
-                    1.0f);
+                    persistent ? 0.05f : 0.075f,
+                    bridgeColor,
+                    persistent ? 0.78f : 1.0f);
                 drawSurfaceDisc(
                     adjacentAnchor,
                     adjacent.center(),
-                    0.075f,
-                    Imath::V3f(1.0f, 0.82f, 0.12f),
-                    1.0f);
+                    persistent ? 0.05f : 0.075f,
+                    bridgeColor,
+                    persistent ? 0.78f : 1.0f);
             }
         }
     }
@@ -436,6 +481,7 @@ void HexPuzzleRenderer::drawHud(
     std::optional<std::size_t> selectedTile,
     const std::vector<ConnectedRoute>& routes,
     std::size_t routeTileCount,
+    std::size_t persistentRouteCount,
     bool sequenceRepeating) const {
     const int panelWidth = std::max(300, std::min(760, camera_.viewportWidth() - 24));
     const int panelHeight = selectedTile.has_value() ? 104 : 82;
@@ -459,9 +505,12 @@ void HexPuzzleRenderer::drawHud(
             << "TILE " << *selectedTile << '/' << planet_.tileCount() - 1
             << "  |  " << board_.tile(*selectedTile).pathCount() << " PATHS"
             << "  |  " << routes.size() << " ROUTES"
-            << "  |  " << routeTileCount << " ROUTE TILES";
+            << "  |  " << routeTileCount << " ROUTE TILES"
+            << "  |  " << persistentRouteCount << " LONG LIT";
     } else {
-        selectionStatus << "NO TILE UNDER POINTER";
+        selectionStatus
+            << persistentRouteCount << " LONG ROUTES STAY HIGHLIGHTED"
+            << "  |  NO TILE UNDER POINTER";
     }
     drawText(
         selectionStatus.str(),

@@ -6,7 +6,10 @@ selected tile. Inset navy panels, cyan connection rims, cased path ribbons, and
 port nodes replace the original flat white presentation. The independent routes
 through the selected tile are highlighted in cyan, magenta, and green; yellow
 ribbons bridge connected sides across tile boundaries, and a gold ring marks the
-selected tile. A compact HUD reports selected-route and whole-board metrics.
+selected tile. The three longest route components of at least four tile paths
+remain persistently highlighted in muted violet, blue, and orange beneath the
+selected-route overlay. A compact HUD reports selected-route and whole-board
+metrics.
 
 Pointer selection uses an eye-space ray intersected against the rendered tile
 polygons, so selection follows visible tile boundaries and clicks outside the

@@ -34,13 +34,16 @@ private:
         const Imath::V3f& color,
         float alpha,
         float width) const;
-    void drawConnectedRoutes(const std::vector<ConnectedRoute>& routes) const;
+    void drawConnectedRoutes(
+        const std::vector<ConnectedRoute>& routes,
+        bool persistent) const;
     void drawSelection(std::size_t selectedTile) const;
     void drawConnections(std::size_t selectedTile) const;
     void drawHud(
         std::optional<std::size_t> selectedTile,
         const std::vector<ConnectedRoute>& routes,
         std::size_t routeTileCount,
+        std::size_t persistentRouteCount,
         bool sequenceRepeating) const;
     void drawScreenPanel(float left, float bottom, float right, float top, const Imath::V3f& color, float alpha) const;
     void drawText(const std::string& text, ScreenPoint position, const Imath::V3f& color, void* font) const;

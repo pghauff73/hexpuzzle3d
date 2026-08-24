@@ -90,6 +90,9 @@ public:
     std::vector<std::size_t> connectedSides(std::size_t id) const;
     std::vector<ConnectedRoute> connectedRoutes(std::size_t startId) const;
     std::vector<ConnectedRoute> allRoutes() const;
+    std::vector<ConnectedRoute> longRoutes(
+        std::size_t maximumRouteCount = 3,
+        std::size_t minimumLength = 4) const;
     const BoardMetrics& metrics() const noexcept;
 
 private:

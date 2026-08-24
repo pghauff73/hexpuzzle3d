@@ -135,6 +135,29 @@ void requireMetricsConsistent(const hexpuzzle::PuzzleBoard& board) {
     require(metrics.longestRoute == longestRoute, "board metrics must expose the longest route");
 }
 
+void requireLongRoutesConsistent(const hexpuzzle::PuzzleBoard& board) {
+    const std::vector<hexpuzzle::ConnectedRoute> routes = board.longRoutes();
+    require(routes.size() <= 3, "persistent highlighting must remain limited to three routes");
+    for (std::size_t index = 0; index < routes.size(); ++index) {
+        require(routes[index].size() >= 4, "persistent highlighting must exclude short routes");
+        if (index != 0) {
+            require(
+                routes[index - 1].size() >= routes[index].size(),
+                "persistent routes must be ordered longest first");
+        }
+    }
+    if (board.metrics().longestRoute >= 4) {
+        require(!routes.empty(), "a qualifying longest route must stay highlighted");
+        require(
+            routes.front().size() == board.metrics().longestRoute,
+            "the first persistent highlight must be the board's longest route");
+    }
+    require(board.longRoutes(0).empty(), "zero persistent route capacity must return no routes");
+    require(
+        board.longRoutes(3, board.metrics().longestRoute + 1).empty(),
+        "persistent route selection must respect its minimum length");
+}
+
 void testPlanetCountsAndTopology() {
     hexpuzzle::HexPlanet levelZero({0, 0.17f, 0.5f, 7});
     require(levelZero.tileCount() == 12, "level zero must contain 12 tiles");
@@ -491,6 +514,8 @@ void testPuzzleBoardOwnershipAndDeterminism() {
     }
     requireMetricsConsistent(first);
     requireMetricsConsistent(second);
+    requireLongRoutesConsistent(first);
+    requireLongRoutesConsistent(second);
 
     hexpuzzle::PuzzleBoard firstCandidate(planet, 23, {1});
     require(

@@ -399,6 +399,34 @@ std::vector<ConnectedRoute> PuzzleBoard::allRoutes() const {
     return routes;
 }
 
+std::vector<ConnectedRoute> PuzzleBoard::longRoutes(
+    std::size_t maximumRouteCount,
+    std::size_t minimumLength) const {
+    if (maximumRouteCount == 0) {
+        return {};
+    }
+
+    std::vector<ConnectedRoute> routes = allRoutes();
+    routes.erase(
+        std::remove_if(
+            routes.begin(),
+            routes.end(),
+            [&](const ConnectedRoute& route) {
+                return route.size() < minimumLength;
+            }),
+        routes.end());
+    std::stable_sort(
+        routes.begin(),
+        routes.end(),
+        [](const ConnectedRoute& first, const ConnectedRoute& second) {
+            return first.size() > second.size();
+        });
+    if (routes.size() > maximumRouteCount) {
+        routes.resize(maximumRouteCount);
+    }
+    return routes;
+}
+
 const BoardMetrics& PuzzleBoard::metrics() const noexcept {
     return metrics_;
 }
