@@ -1,630 +1,505 @@
-//-------------------------------------------------------------------------------------------------------------------------
-// HEX PLANET
-
-
-
-
-
-// Author Pamela Hauff 2023
-
-//------------------------------------------------------------------------------------------------------------------------
-
-#include <string>
-#include <iostream>
-#include <vector>
-#include <algorithm>
-
-
-// GL and related includes
-#include <GL/gl.h>
-
-#include <GL/glu.h>
-#include <GL/glut.h>
-
-
 #include "hexplanet.h"
 
-bool HexPlanet::m_initStaticRes = false;
-GLuint HexPlanet::g_texTemplate;
-GLuint HexPlanet::g_texTileset;
-GLuint HexPlanet::g_texTilesetGrid;
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <map>
+#include <stdexcept>
+#include <utility>
 
-float HexPlanet::kPlanetRadius = 10.0f;
+namespace hexpuzzle {
+namespace {
 
-HexTile::HexTile( Imath::V3f p ) :
-	m_vertPos( p )
-{
-	m_terrain = HexTile::Terrain_DESERT;
-	m_nrm = p.normalize();
+constexpr float pi = 3.14159265358979323846f;
+
+Imath::V3f normalized(Imath::V3f value) {
+    if (value.length() != 0.0f) {
+        value.normalize();
+    }
+    return value;
 }
 
-HexTri::HexTri( size_t a, size_t b, size_t c) :
-	m_hexA( a ), m_hexB( b ), m_hexC( c )
-{
-	m_nbAB = NULL;
-	m_nbBC = NULL;
-	m_nbCA = NULL;
-
-	// Mark newvert as uninitialized
-	m_tmp.m_newvert = std::string::npos;
-
-	// DBG color. For debugging
-	//m_dbgColor.r = (float)rand() / (float)RAND_MAX;
-	//m_dbgColor.g = (float)rand() / (float)RAND_MAX;
-	//m_dbgColor.b = (float)rand() / (float)RAND_MAX;
-	
+Imath::V3f tangentComponent(const Imath::V3f& direction, const Imath::V3f& normal) {
+    return normalized(direction - normal * direction.dot(normal));
 }
 
-Imath::V3f HexTri::getCenter( const std::vector<HexTile> &hexes )
-{
-	Imath::V3f pntCenter = hexes[ m_hexA ].m_vertPos;
-	pntCenter += hexes[ m_hexB ].m_vertPos;
-	pntCenter += hexes[ m_hexC ].m_vertPos;
-	pntCenter /= 3.0f;
-
-	return pntCenter;
+bool rayTriangleDistance(
+    const Ray& ray,
+    const Imath::V3f& first,
+    const Imath::V3f& second,
+    const Imath::V3f& third,
+    float& distance) {
+    constexpr float epsilon = 0.000001f;
+    const Imath::V3f firstEdge = second - first;
+    const Imath::V3f secondEdge = third - first;
+    const Imath::V3f perpendicular = ray.direction.cross(secondEdge);
+    const float determinant = firstEdge.dot(perpendicular);
+    if (std::abs(determinant) < epsilon) {
+        return false;
+    }
+    const float inverseDeterminant = 1.0f / determinant;
+    const Imath::V3f fromFirst = ray.origin - first;
+    const float firstCoordinate = fromFirst.dot(perpendicular) * inverseDeterminant;
+    if (firstCoordinate < 0.0f || firstCoordinate > 1.0f) {
+        return false;
+    }
+    const Imath::V3f secondPerpendicular = fromFirst.cross(firstEdge);
+    const float secondCoordinate = ray.direction.dot(secondPerpendicular) * inverseDeterminant;
+    if (secondCoordinate < 0.0f || firstCoordinate + secondCoordinate > 1.0f) {
+        return false;
+    }
+    distance = secondEdge.dot(secondPerpendicular) * inverseDeterminant;
+    return distance >= 0.0f;
 }
 
+using Edge = std::pair<std::size_t, std::size_t>;
 
-HexPlanet::HexPlanet( int subd_level, float trandom, float twatery  ) :
-	m_subdLevel( 0 )
-{
-	// build initial (level 0) mesh
-	buildLevel0( twatery );
-
-	// subdivide until desired level
-	while (m_subdLevel < subd_level)
-	{
-		std::cout<<"Level:"<<subd_level<<std::endl;
-		subdivide( trandom, twatery);
-		
-	}
-
-	// planetize if we're at level 0
-	if (subd_level == 0)
-	{
-		projectToSphere();
-	}
+Edge canonicalEdge(std::size_t first, std::size_t second) {
+    return {std::min(first, second), std::max(first, second)};
 }
 
-//=============================
-// buildLevel0 -- builds the initial icosahedron
-// for the planet mesh
-//=============================
-void HexPlanet::buildLevel0( float twatery )
-{
-	// hard code an icosahedron (20 sided die)
-	m_hexes.erase( m_hexes.begin(), m_hexes.end() );	
-	m_hexes.push_back( HexTile( Imath::V3f( 0.723606f, 0.0f, 1.17082f )));
-	m_hexes.push_back( HexTile( Imath::V3f( 0.0f, 1.17082f, 0.723606f )));
-	m_hexes.push_back( HexTile( Imath::V3f( -0.723606f, 0.0f, 1.17082f )));
-	m_hexes.push_back( HexTile( Imath::V3f( 0.0f, -1.17082f,  0.723606f )));
-	m_hexes.push_back( HexTile( Imath::V3f( 0.723606f, 0.0f, -1.17082f )));
-	m_hexes.push_back( HexTile( Imath::V3f( 0.0f, -1.17082f, -0.723606f )));
-	m_hexes.push_back( HexTile( Imath::V3f( -0.723606f, 0.0f, -1.17082f )));
-	m_hexes.push_back( HexTile( Imath::V3f( 0.0f, 1.17082f, -0.723606f )));
-	m_hexes.push_back( HexTile( Imath::V3f( 1.17082f, -0.723606f, 0.0f )));
-	m_hexes.push_back( HexTile( Imath::V3f( 1.17082f, 0.723606f, 0.0f )));
-	m_hexes.push_back( HexTile( Imath::V3f( -1.17082f, 0.723606f, 0.0f )));
-	m_hexes.push_back( HexTile( Imath::V3f( -1.17082f, -0.723606f,  0.0f )));
-
-	// set initial terrain types
-	for (std::vector<HexTile>::iterator hi = m_hexes.begin();
-		hi != m_hexes.end(); hi++)
-	{
-		(*hi).m_terrain = getRandomTerrain( twatery );
-	}
-
-	m_hexdual.push_back( HexTri( 5, 11, 6 ));
-	m_hexdual.push_back( HexTri( 1, 2, 0 ));
-	m_hexdual.push_back( HexTri( 0, 2, 3 ));
-	m_hexdual.push_back( HexTri( 5, 6, 4 ));
-	m_hexdual.push_back( HexTri( 4, 6, 7 ));
-	m_hexdual.push_back( HexTri( 9, 1, 0 ));
-	m_hexdual.push_back( HexTri( 10, 2, 1 ));
-	m_hexdual.push_back( HexTri( 2, 10, 11 ));
-	m_hexdual.push_back( HexTri( 11, 3, 2 ));
-	m_hexdual.push_back( HexTri( 8, 9, 0 ));
-	m_hexdual.push_back( HexTri( 0, 3, 8 ));
-	m_hexdual.push_back( HexTri( 11, 10, 6 ));
-	m_hexdual.push_back( HexTri( 4, 7, 9 ));
-	m_hexdual.push_back( HexTri( 9, 8, 4 ));
-	m_hexdual.push_back( HexTri( 7, 6, 10 ));
-	m_hexdual.push_back( HexTri( 1, 9, 7 ));
-	m_hexdual.push_back( HexTri( 10, 1, 7 ));
-	m_hexdual.push_back( HexTri( 5, 4, 8 ));
-	m_hexdual.push_back( HexTri( 3, 11, 5 ));
-	m_hexdual.push_back( HexTri( 8, 3, 5 ));	
-
-	// make planet sized
-	// projectToSphere();
-
-	// assign neighbors
-	findNeighbors();
+std::pair<std::size_t, std::size_t> triangleEdge(
+    const HexTriangle& triangle,
+    std::size_t edgeIndex) {
+    switch (edgeIndex) {
+        case 0:
+            return {triangle.vertices[0], triangle.vertices[1]};
+        case 1:
+            return {triangle.vertices[1], triangle.vertices[2]};
+        default:
+            return {triangle.vertices[2], triangle.vertices[0]};
+    }
 }
 
-// Used in subdivide
-void createTrisFromEdge( std::vector< std::pair< size_t, size_t > > &edgeDone,
-							 std::vector<HexTri> &trilist,
-							 HexTri &tri, HexTri &otherTri,
-							 size_t eA, size_t eB )
-{
-	std::pair<size_t, size_t> eid( std::min( eA, eB ), std::max( eA, eB ) );
-	if (std::find( edgeDone.begin(), edgeDone.end(), eid ) == edgeDone.end() )
-	{
-		trilist.push_back( HexTri( eA, tri.m_tmp.m_newvert, otherTri.m_tmp.m_newvert ) );					
-		trilist.push_back( HexTri( tri.m_tmp.m_newvert, otherTri.m_tmp.m_newvert, eB ) );
-		edgeDone.push_back( eid );
-	}
+}  // namespace
+
+HexPlanet::HexPlanet()
+    : HexPlanet(Settings{}) {
 }
 
-//=============================
-// subdivide()
-// Perform sqrt(3) subdivision on
-// the mesh
-//=============================
-void HexPlanet::subdivide( float trandom, float twatery )
-{
+HexPlanet::HexPlanet(Settings settings)
+    : settings_(settings), random_(settings.randomSeed) {
+    if (settings_.subdivisionLevel < 0) {
+        throw std::invalid_argument("subdivision level cannot be negative");
+    }
+    if (settings_.terrainRandomness < 0.0f || settings_.terrainRandomness > 1.0f) {
+        throw std::invalid_argument("terrain randomness must be between zero and one");
+    }
+    if (settings_.waterProbability < 0.0f || settings_.waterProbability > 1.0f) {
+        throw std::invalid_argument("water probability must be between zero and one");
+    }
 
-
-	// Subdivide by creating two triangles in 
-	// the next level mesh for every edge in the
-	// src mesh. Keep track of which edges have
-	// already been handled
-	std::vector< std::pair< size_t, size_t > > edgeDone;
-
-	// The new mesh that will be created	
-	std::vector<HexTri> newHexdual;
-
-	// Go through each triangle in the old mesh and create
-	// a new vert at the center of each one
-	for (std::vector<HexTri>::iterator ti = m_hexdual.begin();
-		 ti != m_hexdual.end(); ti++ )
-	{
-		// Create a new vert at the center of the triangle
-		Imath::V3f pNewVert;
-		(*ti).m_tmp.m_newvert = m_hexes.size();
-		pNewVert = (*ti).getCenter( m_hexes );		
-
-		// add it to the list of hexes
-		m_hexes.push_back( HexTile( pNewVert ) );
-
-
-		// if we're below the random threshold
-		// inherit the terrain from an arbitrary parent		
-		if  ( ((float)rand() / (float)RAND_MAX) > trandom )
-		{
-			int tr = rand() % 3;
-			switch (tr)
-			{
-			case 0:
-				m_hexes.back().m_terrain = m_hexes[ (*ti).m_hexA ].m_terrain;
-				break;
-			case 1:
-				m_hexes.back().m_terrain = m_hexes[ (*ti).m_hexB ].m_terrain;
-				break;
-			case 2:
-				m_hexes.back().m_terrain = m_hexes[ (*ti).m_hexC ].m_terrain;
-				break;
-			}
-		}
-		else
-		{
-			// Go with a random tile
-			m_hexes.back().m_terrain = getRandomTerrain( twatery );
-		}
-	}
-
-	// Go through each triangle in the old mesh and create
-	// a new pair of triangles for each edge
-	for (std::vector<HexTri>::iterator ti = m_hexdual.begin();
-		 ti != m_hexdual.end(); ti++ )
-	{
-		HexTri &t = (*ti);
-
-		// Create a pair for edge AB
-		createTrisFromEdge( edgeDone, newHexdual, t, *(t.m_nbAB), t.m_hexA, t.m_hexB );
-
-		// Create a pair for edge BC
-		createTrisFromEdge( edgeDone, newHexdual, t, *(t.m_nbBC), t.m_hexB, t.m_hexC );
-		
-		// Create a pair for edge CA
-		createTrisFromEdge( edgeDone, newHexdual, t, *(t.m_nbCA), t.m_hexC, t.m_hexA );
-		
-	}
-
-	// replace the current set of hexes with the dual
-	m_hexdual = newHexdual;
-
-	// find new neighbors
-	findNeighbors();
-
-	// reproject back to sphere
-	projectToSphere();
-
-	// note the subdivision
-	m_subdLevel++;
+    buildLevelZero();
+    while (subdivisionLevel_ < settings_.subdivisionLevel) {
+        subdivide();
+    }
+    if (settings_.subdivisionLevel == 0) {
+        projectToSphere();
+        rebuildConnectivity();
+    }
 }
 
-
-//=============================
-// findNeighbors() -- it would be more
-// efficent to just keep track of the neighbors
-// during subdivision, but this is easier
-//=============================
-bool edgeMatch( size_t a, size_t b,
-				size_t otherA, size_t otherB, size_t otherC )
-{
-	if ( ((a==otherA) && (b==otherB)) ||
-		 ((a==otherB) && (b==otherC)) ||
-		 ((a==otherC) && (b==otherA)) ||
-		 ((b==otherA) && (a==otherB)) ||
-		 ((b==otherB) && (a==otherC)) ||
-		 ((b==otherC) && (a==otherA)) ) return true;
-	return false;
+int HexPlanet::subdivisionLevel() const noexcept {
+    return subdivisionLevel_;
 }
 
-bool _cmpAngle( HexTri *a, HexTri *b )
-{
-	return a->m_tmp.m_angle < b->m_tmp.m_angle;
+std::size_t HexPlanet::tileCount() const noexcept {
+    return tiles_.size();
 }
 
-void HexPlanet::findNeighbors()
-{
-	// Clear the hextri list on the hexes
-	for (std::vector<HexTile>::iterator hi = m_hexes.begin();
-		hi != m_hexes.end(); hi++ )
-	{
-		(*hi).m_hextri.erase( (*hi).m_hextri.begin(), (*hi).m_hextri.end() );
-	}
-
-	// Find edge adjacentcy -- slow and brute force. Should
-	// do this as part of the subdivide step if this were a
-	// non-prototype implementation.
-	for (std::vector<HexTri>::iterator ti = m_hexdual.begin();
-		ti != m_hexdual.end(); ti++)
-	{
-		// find the neighbors for ti
-		for (std::vector<HexTri>::iterator tj = m_hexdual.begin();
-			tj != m_hexdual.end(); tj++)
-		{
-
-			// Don't match ourselves
-			if (ti==tj) continue;
-
-			// Neighbor across edge AB
-			if ( edgeMatch( (*ti).m_hexA, (*ti).m_hexB,
-							(*tj).m_hexA, (*tj).m_hexB, (*tj).m_hexC ) )
-			{
-				(*ti).m_nbAB = &(*tj);
-			}
-
-			// Neighbor across edge BC
-			if ( edgeMatch( (*ti).m_hexB, (*ti).m_hexC,
-							(*tj).m_hexA, (*tj).m_hexB, (*tj).m_hexC ) )
-			{
-				(*ti).m_nbBC = &(*tj);
-			}
-
-			// Neighbor across edge CA
-			if ( edgeMatch( (*ti).m_hexC, (*ti).m_hexA,
-							(*tj).m_hexA, (*tj).m_hexB, (*tj).m_hexC ) )
-			{
-				(*ti).m_nbCA = &(*tj);
-			}
-		}
-
-
-		// Also as part of findNeighbors, set up the hextri pointers
-		m_hexes[(*ti).m_hexA].m_hextri.push_back( &(*ti) );
-		m_hexes[(*ti).m_hexB].m_hextri.push_back( &(*ti) );
-		m_hexes[(*ti).m_hexC].m_hextri.push_back( &(*ti) );
-	}
-
-	// Now sort the hextri list on the hexes by the angle
-	// around the hex center
-	for (std::vector<HexTile>::iterator hi = m_hexes.begin();
-		hi != m_hexes.end(); hi++ )
-	{
-		// assign angles 
-		for (std::vector<HexTri*>::iterator ti = (*hi).m_hextri.begin();
-			  ti != (*hi).m_hextri.end(); ti++ )
-		{
-			// arbitrarily use the first one as starting angle
-			// it doesn't matter		
-			Imath::V3f v1 = (*hi).m_hextri.back()->getCenter( m_hexes ) - (*hi).m_vertPos;			
-			Imath::V3f nrm = (*ti)->getCenter( m_hexes );
-			Imath::V3f v2 = nrm - (*hi).m_vertPos;			
-			nrm = nrm.normalize();
-			v1 = v1.normalize();
-			v2 = v2.normalize();
-
-			float ang = acos( v1.dot( v2 ) );
-			float dir = nrm.dot( v1.cross( v2 ) );
-			if (dir < 0.0f) ang = M_PI + (M_PI - ang);
-
-			(*ti)->m_tmp.m_angle = ang;
-		}
-
-		// Sort them
-		std::sort( (*hi).m_hextri.begin(), (*hi).m_hextri.end(), _cmpAngle );
-	}
-	
+std::size_t HexPlanet::triangleCount() const noexcept {
+    return triangles_.size();
 }
 
-//=============================
-// projectToSphere()
-//=============================
-void HexPlanet::projectToSphere()
-{
-	for (std::vector<HexTile>::iterator ti = m_hexes.begin();
-		 ti != m_hexes.end(); ti++ )
-	{
-		Imath::V3f p = (*ti).m_vertPos;
-		p.normalize();
-		p *= kPlanetRadius;
-		(*ti).m_vertPos = p;
-	}
+const HexTile& HexPlanet::tile(std::size_t index) const {
+    return tiles_.at(index);
 }
 
-//=============================
-// draw()
-//=============================
-void HexPlanet::draw( int draw_mode )
-{
-	//DBG: Draw axes
-
-	glBegin( GL_LINES );
-	
-	glColor3f( 1.0f, 0.0f, 0.0f );
-	glVertex3f( 0.0f, 0.0f, 0.0f );
-	glVertex3f( 1.0f, 0.0f, 0.0f );
-
-
-	glColor3f( 0.0f, 1.0f, 0.0f );
-	glVertex3f( 0.0f, 0.0f, 0.0f );
-	glVertex3f( 0.0f, 1.0f, 0.0f );
-
-	glColor3f( 0.0f, 0.0f, 1.0f );
-	glVertex3f( 0.0f, 0.0f, 0.0f );
-	glVertex3f( 0.0f, 0.0f, 1.0f );
-
-	glEnd();
-
-	
-
-	
-	// Draw the hexes
-	//glColor3f( 1.0f, 1.0f, 1.0f );
-	//glEnable( GL_TEXTURE_2D );
-
-	
-	
-
-
-	glBegin( GL_TRIANGLES );
-	for ( std::vector<HexTri>::iterator hi = m_hexdual.begin();
-		 hi != m_hexdual.end(); hi++ )
-	{
-		Imath::V3f pA, pB, pC;
-		Imath::V3f nA, nB, nC;
-		pA = m_hexes[ (*hi).m_hexA ].m_vertPos;
-		pB = m_hexes[ (*hi).m_hexB ].m_vertPos;
-		pC = m_hexes[ (*hi).m_hexC ].m_vertPos;	
-
-		nA = m_hexes[ (*hi).m_hexA ].m_nrm;
-		nB = m_hexes[ (*hi).m_hexB ].m_nrm;
-		nC = m_hexes[ (*hi).m_hexC ].m_nrm;	
-
-		if (draw_mode == 1)
-		{
-			// Template draw mode
-			glTexCoord2f( 0.5f, 0.94999 );
-			glNormal3f( nA.x, nA.y, nA.z );
-			glVertex3f( pA.x, pA.y, pA.z );
-
-			glTexCoord2f( 0.8897, 0.275 );
-			glNormal3f( nB.x, nB.y, nB.z );
-			glVertex3f( pB.x, pB.y, pB.z );
-
-			glTexCoord2f( 0.1103f, 0.275 );
-			glNormal3f( nC.x, nC.y, nC.z );
-			glVertex3f( pC.x, pC.y, pC.z );		
-		} 
-		else // terrain or terrain_Grid
-		{
-			// Terrain draw mode
-			Imath::V2f txA( 0.5f, 0.94999 ), 
-				   txB( 0.8897, 0.275 ), 
-				   txC( 0.1103f, 0.275 ),
-				   txTileMin, txTileMax;
-
-			// offset texture coords to fit tile
-			int ndxA , ndxB, ndxC;
-			ndxA = m_hexes[ (*hi).m_hexA ].m_terrain;
-			ndxB = m_hexes[ (*hi).m_hexC ].m_terrain;
-			ndxC = m_hexes[ (*hi).m_hexB ].m_terrain;
-
-			// TODO: Could use GL texture transform here
-			int ndx = (ndxA*25)+(ndxB*5)+ndxC;
-			int tile_y = ndx / 12;
-			int tile_x = ndx % 12;		
-		
-			// tileset is 1020 pixels wide, 1020/1024 = 0.996...
-			float sz = 0.99609375/12.0f; 
-
-			txA.x = (txA.x * sz) + (tile_x*sz);
-			txA.y = (txA.y * sz) + (tile_y*sz);
-
-			txB.x = (txB.x * sz) + (tile_x*sz);
-			txB.y = (txB.y * sz) + (tile_y*sz);
-
-			txC.x = (txC.x * sz) + (tile_x*sz);
-			txC.y = (txC.y * sz) + (tile_y*sz);
-
-			glTexCoord2f( txA.x, txA.y );
-			glColor3f( 1.0f, 0.0f, 0.0f );
-			glNormal3f( nA.x, nA.y, nA.z );
-			glVertex3f( pA.x, pA.y, pA.z );
-
-			glTexCoord2f( txB.x, txB.y  );
-			glColor3f( 0.0f, 1.0f, 0.0f );
-			glNormal3f( nB.x, nB.y, nB.z );
-			glVertex3f( pB.x, pB.y, pB.z );
-
-			glTexCoord2f( txC.x, txC.y  );
-			glColor3f( 0.0f, 0.0f, 1.0f );
-			glNormal3f( nC.x, nC.y, nC.z );
-			glVertex3f( pC.x, pC.y, pC.z );		
-		}
-	}
-	glEnd();	
-
-
-	// DBG: Draw the dual mesh
-	glColor3f( 1.0f, 1.0f, 1.0f );
-	glLineWidth( 2.0f );	
-	
-	for ( std::vector<HexTri>::iterator hi = m_hexdual.begin();
-		 hi != m_hexdual.end(); hi++ )
-	{
-		glBegin( GL_LINE_LOOP );
-		Imath::V3f pA, pB, pC;
-		pA = m_hexes[ (*hi).m_hexA ].m_vertPos;
-		pB = m_hexes[ (*hi).m_hexB ].m_vertPos;
-		pC = m_hexes[ (*hi).m_hexC ].m_vertPos;
-	
-		glVertex3f( pA.x, pA.y, pA.z );
-		glVertex3f( pB.x, pB.y, pB.z );
-		glVertex3f( pC.x, pC.y, pC.z );		
-		
-		glEnd();	
-	}
-
+const HexTriangle& HexPlanet::triangle(std::size_t index) const {
+    return triangles_.at(index);
 }
 
-size_t HexPlanet::getNumHexes()
-{
-	return m_hexes.size();
+const std::vector<HexTile>& HexPlanet::tiles() const noexcept {
+    return tiles_;
 }
 
-int HexPlanet::getRandomTerrain( float twatery )
-{
-	if ( ((float)rand() / (float)RAND_MAX) > twatery)
-	{
-		// return a land hex randomly
-		int t = (((float)rand() / (float)RAND_MAX) * 4) + 1;
-		if (t > HexTile::Terrain_MOUNTAIN) t = HexTile::Terrain_MOUNTAIN;
-		return t;
-	} 
-	else return HexTile::Terrain_WATER;
+const std::vector<HexTriangle>& HexPlanet::triangles() const noexcept {
+    return triangles_;
 }
 
-size_t HexPlanet::getHexIndexFromPoint( Imath::V3f surfPos )
-{
-	size_t best_hex = 0;
-	float best_dot;
+void HexPlanet::buildLevelZero() {
+    tiles_.clear();
+    triangles_.clear();
 
-	// normalize
-	Imath::V3f p = surfPos;
-	p = p.normalize();
-	best_dot = acos( m_hexes[0].m_vertPos.dot( p ) / kPlanetRadius );
+    const std::array<Imath::V3f, 12> vertices{
+        Imath::V3f(0.723606f, 0.0f, 1.17082f),
+        Imath::V3f(0.0f, 1.17082f, 0.723606f),
+        Imath::V3f(-0.723606f, 0.0f, 1.17082f),
+        Imath::V3f(0.0f, -1.17082f, 0.723606f),
+        Imath::V3f(0.723606f, 0.0f, -1.17082f),
+        Imath::V3f(0.0f, -1.17082f, -0.723606f),
+        Imath::V3f(-0.723606f, 0.0f, -1.17082f),
+        Imath::V3f(0.0f, 1.17082f, -0.723606f),
+        Imath::V3f(1.17082f, -0.723606f, 0.0f),
+        Imath::V3f(1.17082f, 0.723606f, 0.0f),
+        Imath::V3f(-1.17082f, 0.723606f, 0.0f),
+        Imath::V3f(-1.17082f, -0.723606f, 0.0f),
+    };
+    tiles_.reserve(vertices.size());
+    for (const auto& position : vertices) {
+        tiles_.push_back({position, normalized(position), randomTerrain(), {}});
+    }
 
-
-	// clever cheat -- just use the dot product to find the 
-	// smallest angle -- and thus the containing hex
-	for (size_t ndx = 1; ndx < m_hexes.size(); ndx++)
-	{
-		float d = acos( m_hexes[ndx].m_vertPos.dot( p ) / kPlanetRadius );
-		if (d < best_dot)
-		{
-			best_hex = ndx;
-			best_dot = d;
-		}
-	}
-
-	return best_hex;
+    const std::array<std::array<std::size_t, 3>, 20> faces{
+        std::array<std::size_t, 3>{5, 11, 6},
+        {1, 2, 0},
+        {0, 2, 3},
+        {5, 6, 4},
+        {4, 6, 7},
+        {9, 1, 0},
+        {10, 2, 1},
+        {2, 10, 11},
+        {11, 3, 2},
+        {8, 9, 0},
+        {0, 3, 8},
+        {11, 10, 6},
+        {4, 7, 9},
+        {9, 8, 4},
+        {7, 6, 10},
+        {1, 9, 7},
+        {10, 1, 7},
+        {8, 3, 5},
+        {5, 4, 8},
+        {3, 11, 5},
+    };
+    triangles_.reserve(faces.size());
+    for (const auto& face : faces) {
+        triangles_.push_back({face});
+    }
+    rebuildConnectivity();
 }
 
-// returns the polygon representation of this
-// hex. Usually 6-sided but could be a pentagon	
-void HexPlanet::getPolygon( HexTile &tile, std::vector<Imath::V3f> &poly, float offset )
-{
-	// clear list
-	poly.erase( poly.begin(), poly.end() );
+void HexPlanet::subdivide() {
+    for (auto& triangle : triangles_) {
+        triangle.subdivisionVertex = tiles_.size();
+        const auto position = triangleCenter(triangle);
+        TerrainType terrain = randomTerrain();
+        std::uniform_real_distribution<float> chance(0.0f, 1.0f);
+        if (chance(random_) > settings_.terrainRandomness) {
+            std::uniform_int_distribution<int> parent(0, 2);
+            terrain = tiles_[triangle.vertices[static_cast<std::size_t>(parent(random_))]].terrain;
+        }
+        tiles_.push_back({position, normalized(position), terrain, {}});
+    }
 
-	// construct polygon
-	for ( std::vector<HexTri*>::iterator ti = tile.m_hextri.begin();
-		  ti != tile.m_hextri.end(); ti++ )
-	{
-		Imath::V3f p = (*ti)->getCenter( m_hexes );
-		p.normalize();
-		p *= kPlanetRadius + offset;
-		poly.push_back( p );
-		/*Imath::V3f p1 =m_hexes[ (*ti)->m_hexA ].m_vertPos;
-		p1.normalize();
-		p1 *= kPlanetRadius + offset;
-		poly.push_back( p1 );
+    std::vector<HexTriangle> nextTriangles;
+    nextTriangles.reserve(triangles_.size() * 3);
+    std::map<Edge, bool> processed;
+    for (std::size_t triangleIndex = 0; triangleIndex < triangles_.size(); ++triangleIndex) {
+        const auto& triangle = triangles_[triangleIndex];
+        for (std::size_t edgeIndex = 0; edgeIndex < 3; ++edgeIndex) {
+            const auto [edgeStart, edgeEnd] = triangleEdge(triangle, edgeIndex);
+            const Edge edge = canonicalEdge(edgeStart, edgeEnd);
+            if (processed[edge]) {
+                continue;
+            }
+            const std::size_t neighborIndex = triangle.neighbors[edgeIndex];
+            if (neighborIndex == HexTriangle::invalidIndex) {
+                throw std::runtime_error("planet mesh contains an open edge");
+            }
+            const std::size_t center = triangle.subdivisionVertex;
+            const std::size_t neighborCenter = triangles_[neighborIndex].subdivisionVertex;
+            nextTriangles.push_back({{edgeStart, center, neighborCenter}});
+            nextTriangles.push_back({{center, neighborCenter, edgeEnd}});
+            processed[edge] = true;
+        }
+    }
 
-		Imath::V3f p2 =m_hexes[ (*ti)->m_hexB ].m_vertPos;
-		p2.normalize();
-		p2 *= kPlanetRadius + offset;
-		poly.push_back( p2 );
-
-		Imath::V3f p3 =m_hexes[ (*ti)->m_hexC ].m_vertPos;
-		p3.normalize();
-		p3 *= kPlanetRadius + offset;
-		poly.push_back( p3 );*/	
-	}
+    triangles_ = std::move(nextTriangles);
+    ++subdivisionLevel_;
+    projectToSphere();
+    rebuildConnectivity();
 }
 
-// returns the indices of the neighbors of this tile
-// Usually 6, could be 5
-void HexPlanet::getNeighbors( size_t tileNdx, std::vector<size_t> &nbrs )
-{
-	// clear list
-	nbrs.erase( nbrs.begin(), nbrs.end() );
+void HexPlanet::rebuildConnectivity() {
+    for (auto& tile : tiles_) {
+        tile.incidentTriangles.clear();
+    }
+    for (auto& triangle : triangles_) {
+        triangle.neighbors.fill(HexTriangle::invalidIndex);
+    }
 
-	// find neighbors
-	for ( std::vector<HexTri*>::iterator ti = m_hexes[tileNdx].m_hextri.begin();
-		  ti != m_hexes[tileNdx].m_hextri.end(); ti++ )
-	{
-		// Check all all the hexes on neiboring 
-		// hextries (except ourself), checking for dups
+    std::map<Edge, std::pair<std::size_t, std::size_t>> firstEdge;
+    for (std::size_t triangleIndex = 0; triangleIndex < triangles_.size(); ++triangleIndex) {
+        auto& triangle = triangles_[triangleIndex];
+        for (const std::size_t vertex : triangle.vertices) {
+            tiles_.at(vertex).incidentTriangles.push_back(triangleIndex);
+        }
+        for (std::size_t edgeIndex = 0; edgeIndex < 3; ++edgeIndex) {
+            const auto [edgeStart, edgeEnd] = triangleEdge(triangle, edgeIndex);
+            const Edge edge = canonicalEdge(edgeStart, edgeEnd);
+            const auto found = firstEdge.find(edge);
+            if (found == firstEdge.end()) {
+                firstEdge.emplace(edge, std::make_pair(triangleIndex, edgeIndex));
+                continue;
+            }
+            const auto [otherTriangle, otherEdge] = found->second;
+            triangle.neighbors[edgeIndex] = otherTriangle;
+            triangles_[otherTriangle].neighbors[otherEdge] = triangleIndex;
+        }
+    }
 
-		// HEX A
-		if ( ( ((*ti)->m_hexA) != tileNdx ) &&
-			 (find( nbrs.begin(), nbrs.end(), ((*ti)->m_hexA) ) == nbrs.end() ) )
-		{
-			nbrs.push_back( ((*ti)->m_hexA) );
-		}
-
-		// HEX B
-		if ( ( ((*ti)->m_hexB) != tileNdx ) &&
-			 (find( nbrs.begin(), nbrs.end(), ((*ti)->m_hexB) ) == nbrs.end() ) )
-		{
-			nbrs.push_back( ((*ti)->m_hexB) );
-		}
-		
-		// HEX C
-		if ( ( ((*ti)->m_hexC) != tileNdx ) &&
-			 (find( nbrs.begin(), nbrs.end(), ((*ti)->m_hexC) ) == nbrs.end() ) )
-			 
-		{
-			nbrs.push_back( ((*ti)->m_hexC) );
-		}
-	}
+    for (auto& tile : tiles_) {
+        if (tile.incidentTriangles.size() < 3) {
+            throw std::runtime_error("planet tile has insufficient incident triangles");
+        }
+        const Imath::V3f normal = normalized(tile.position);
+        const Imath::V3f firstDirection = normalized(
+            triangleCenter(triangles_[tile.incidentTriangles.front()]) - tile.position);
+        Imath::V3f tangent = firstDirection - normal * firstDirection.dot(normal);
+        tangent = normalized(tangent);
+        const Imath::V3f bitangent = normalized(normal.cross(tangent));
+        std::sort(
+            tile.incidentTriangles.begin(),
+            tile.incidentTriangles.end(),
+            [&](std::size_t left, std::size_t right) {
+                const auto angleFor = [&](std::size_t triangleIndex) {
+                    Imath::V3f direction = triangleCenter(triangles_[triangleIndex]) - tile.position;
+                    direction = normalized(direction - normal * direction.dot(normal));
+                    float angle = std::atan2(direction.dot(bitangent), direction.dot(tangent));
+                    if (angle < 0.0f) {
+                        angle += 2.0f * pi;
+                    }
+                    return angle;
+                };
+                return angleFor(left) < angleFor(right);
+            });
+    }
 }
 
-// Returns a point on the planet's surface given a ray
-bool HexPlanet::rayHitPlanet( Imath::V3f p, Imath::V3f dir, Imath::V3f &result )
-{
-	//float a,b,c,d;
-	//a = dir.dot(dir);
-	//b = (2.0f*dir).dot(p);
-	//c = p.dot(p) - (kPlanetRadius*kPlanetRadius);
-	//d = b*b - 4.0f*a*c;
-	//if (d <=0 ) return false;
-	//result = p + ((-b - sqrt(d)) / 2.0f*a)*dir;
-	return true;
+void HexPlanet::projectToSphere() {
+    for (auto& tile : tiles_) {
+        tile.normal = normalized(tile.position);
+        tile.position = tile.normal * radius;
+    }
 }
+
+TerrainType HexPlanet::randomTerrain() {
+    std::uniform_real_distribution<float> chance(0.0f, 1.0f);
+    if (chance(random_) <= settings_.waterProbability) {
+        return TerrainType::Water;
+    }
+    std::uniform_int_distribution<int> land(
+        static_cast<int>(TerrainType::Desert),
+        static_cast<int>(TerrainType::Mountain));
+    return static_cast<TerrainType>(land(random_));
+}
+
+Imath::V3f HexPlanet::triangleCenter(const HexTriangle& triangle) const {
+    return (
+        tiles_[triangle.vertices[0]].position +
+        tiles_[triangle.vertices[1]].position +
+        tiles_[triangle.vertices[2]].position) /
+        3.0f;
+}
+
+std::vector<Imath::V3f> HexPlanet::polygon(
+    std::size_t tileIndex,
+    SurfaceOffset offset) const {
+    const auto& selectedTile = tiles_.at(tileIndex);
+    std::vector<Imath::V3f> result;
+    result.reserve(selectedTile.incidentTriangles.size());
+    for (const std::size_t triangleIndex : selectedTile.incidentTriangles) {
+        result.push_back(
+            normalized(triangleCenter(triangles_[triangleIndex])) * (radius + offset.value));
+    }
+    return result;
+}
+
+Imath::V3f HexPlanet::sideAnchor(
+    std::size_t tileIndex,
+    std::size_t side,
+    SurfaceOffset offset,
+    float centerInset) const {
+    if (centerInset < 0.0f || centerInset >= 1.0f) {
+        throw std::invalid_argument("side anchor inset must be in [0, 1)");
+    }
+    const std::vector<Imath::V3f> tilePolygon = polygon(tileIndex, offset);
+    if (side >= tilePolygon.size()) {
+        throw std::out_of_range("side anchor is outside the tile polygon");
+    }
+    const float surfaceRadius = radius + offset.value;
+    const Imath::V3f edgeCenter =
+        (tilePolygon[side] + tilePolygon[(side + 1) % tilePolygon.size()]) * 0.5f;
+    const Imath::V3f tileCenter = tile(tileIndex).normal * surfaceRadius;
+    return normalized(edgeCenter * (1.0f - centerInset) + tileCenter * centerInset) *
+        surfaceRadius;
+}
+
+SideConnectionCurve HexPlanet::sideConnectionCurve(
+    std::size_t tileIndex,
+    std::size_t firstSide,
+    std::size_t secondSide,
+    SurfaceOffset offset,
+    float centerInset,
+    std::size_t segmentCount) const {
+    if (firstSide == secondSide) {
+        throw std::invalid_argument("a side connection requires two distinct sides");
+    }
+    if (segmentCount < 2) {
+        throw std::invalid_argument("a side connection curve requires at least two segments");
+    }
+
+    const std::vector<Imath::V3f> tilePolygon = polygon(tileIndex, offset);
+    if (firstSide >= tilePolygon.size() || secondSide >= tilePolygon.size()) {
+        throw std::out_of_range("side connection endpoint is outside the tile polygon");
+    }
+
+    const float surfaceRadius = radius + offset.value;
+    const Imath::V3f tileCenter = tile(tileIndex).normal * surfaceRadius;
+    const auto inwardNormal = [&](std::size_t side, const Imath::V3f& anchor) {
+        const Imath::V3f surfaceNormal = normalized(anchor);
+        const Imath::V3f edgeDirection = tangentComponent(
+            tilePolygon[(side + 1) % tilePolygon.size()] - tilePolygon[side],
+            surfaceNormal);
+        Imath::V3f inward = normalized(surfaceNormal.cross(edgeDirection));
+        const Imath::V3f towardCenter = tangentComponent(tileCenter - anchor, surfaceNormal);
+        if (inward.dot(towardCenter) < 0.0f) {
+            inward = -inward;
+        }
+        return inward;
+    };
+
+    const Imath::V3f first = sideAnchor(tileIndex, firstSide, offset, centerInset);
+    const Imath::V3f second = sideAnchor(tileIndex, secondSide, offset, centerInset);
+    const Imath::V3f firstInward = inwardNormal(firstSide, first);
+    const Imath::V3f secondInward = inwardNormal(secondSide, second);
+    const Imath::V3f firstTravel = tangentComponent(second - first, normalized(first));
+    const Imath::V3f secondTravel = tangentComponent(first - second, normalized(second));
+
+    SideConnectionCurve result;
+    result.straight =
+        firstInward.dot(firstTravel) >= 0.9995f &&
+        secondInward.dot(secondTravel) >= 0.9995f;
+    result.points.reserve(segmentCount + 1);
+
+    const float handleLength = (second - first).length() * 0.22f;
+    const Imath::V3f firstControl = first + firstInward * handleLength;
+    const Imath::V3f secondControl = second + secondInward * handleLength;
+    for (std::size_t segment = 0; segment <= segmentCount; ++segment) {
+        const float amount = static_cast<float>(segment) / static_cast<float>(segmentCount);
+        Imath::V3f point;
+        if (result.straight) {
+            point = first * (1.0f - amount) + second * amount;
+        } else {
+            const float remaining = 1.0f - amount;
+            point =
+                first * (remaining * remaining * remaining) +
+                firstControl * (3.0f * remaining * remaining * amount) +
+                secondControl * (3.0f * remaining * amount * amount) +
+                second * (amount * amount * amount);
+        }
+        result.points.push_back(normalized(point) * surfaceRadius);
+    }
+    result.points.front() = first;
+    result.points.back() = second;
+    return result;
+}
+
+std::vector<std::size_t> HexPlanet::neighbors(std::size_t tileIndex) const {
+    const auto& selectedTile = tiles_.at(tileIndex);
+    std::vector<std::size_t> result;
+    result.reserve(selectedTile.incidentTriangles.size());
+    for (std::size_t edge = 0; edge < selectedTile.incidentTriangles.size(); ++edge) {
+        const HexTriangle& first = triangles_.at(selectedTile.incidentTriangles[edge]);
+        const HexTriangle& second = triangles_.at(
+            selectedTile.incidentTriangles[(edge + 1) % selectedTile.incidentTriangles.size()]);
+        const auto sharedNeighbor = std::find_if(
+            first.vertices.begin(),
+            first.vertices.end(),
+            [&](std::size_t vertex) {
+                return vertex != tileIndex &&
+                    std::find(second.vertices.begin(), second.vertices.end(), vertex) != second.vertices.end();
+            });
+        if (sharedNeighbor == first.vertices.end()) {
+            throw std::logic_error("adjacent tile triangles do not share an edge");
+        }
+        if (std::find(result.begin(), result.end(), *sharedNeighbor) != result.end()) {
+            throw std::logic_error("tile polygon maps multiple edges to one neighbor");
+        }
+        result.push_back(*sharedNeighbor);
+    }
+    return result;
+}
+
+std::size_t HexPlanet::nearestTile(const Imath::V3f& surfaceDirection) const {
+    if (tiles_.empty()) {
+        throw std::runtime_error("cannot select a tile on an empty planet");
+    }
+    const Imath::V3f direction = normalized(surfaceDirection);
+    std::size_t bestIndex = 0;
+    float bestDot = tiles_.front().normal.dot(direction);
+    for (std::size_t index = 1; index < tiles_.size(); ++index) {
+        const float candidate = tiles_[index].normal.dot(direction);
+        if (candidate > bestDot) {
+            bestDot = candidate;
+            bestIndex = index;
+        }
+    }
+    return bestIndex;
+}
+
+bool HexPlanet::rayIntersection(const Ray& input, Imath::V3f& result) const {
+    const Imath::V3f direction = normalized(input.direction);
+    const float a = direction.dot(direction);
+    const float b = 2.0f * direction.dot(input.origin);
+    const float c = input.origin.dot(input.origin) - radius * radius;
+    const float discriminant = b * b - 4.0f * a * c;
+    if (discriminant < 0.0f) {
+        return false;
+    }
+    const float root = std::sqrt(discriminant);
+    const float nearDistance = (-b - root) / (2.0f * a);
+    const float farDistance = (-b + root) / (2.0f * a);
+    const float distance = nearDistance >= 0.0f ? nearDistance : farDistance;
+    if (distance < 0.0f) {
+        return false;
+    }
+    result = input.origin + direction * distance;
+    return true;
+}
+
+bool HexPlanet::tileIntersection(
+    const Ray& input,
+    std::size_t& tileIndex,
+    Imath::V3f& result,
+    SurfaceOffset offset) const {
+    const Ray ray{input.origin, normalized(input.direction)};
+    float closestDistance = std::numeric_limits<float>::max();
+    bool found = false;
+    for (std::size_t id = 0; id < tiles_.size(); ++id) {
+        const std::vector<Imath::V3f> tilePolygon = polygon(id, offset);
+        const Imath::V3f center = tiles_[id].normal * (radius + offset.value);
+        for (std::size_t edge = 0; edge < tilePolygon.size(); ++edge) {
+            float distance = 0.0f;
+            if (!rayTriangleDistance(
+                    ray,
+                    center,
+                    tilePolygon[edge],
+                    tilePolygon[(edge + 1) % tilePolygon.size()],
+                    distance) ||
+                distance >= closestDistance) {
+                continue;
+            }
+            closestDistance = distance;
+            tileIndex = id;
+            found = true;
+        }
+    }
+    if (found) {
+        result = ray.origin + ray.direction * closestDistance;
+    }
+    return found;
+}
+
+}  // namespace hexpuzzle

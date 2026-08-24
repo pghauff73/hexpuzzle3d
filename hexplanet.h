@@ -1,138 +1,117 @@
-//-------------------------------------------------------------------------------------------------------------------------
-// HEX PLANET
+#pragma once
 
+#include <Imath/ImathVec.h>
 
-
-
-
-// Author Pamela Hauff 2023
-
-//------------------------------------------------------------------------------------------------------------------------
-
-#ifndef HEXPLANET_H
-#define HEXPLANET_H
-
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <random>
 #include <vector>
 
-#include <OpenEXR/ImathVec.h>
-#include <OpenEXR/ImathColor.h>
+namespace hexpuzzle {
 
-#include <GL/gl.h>
-
-#include <GL/glu.h>
-
-struct HexTri;
-
-// A Hextile is a single hex (or sometimes pentagon)
-// in the hex tiled planet. It is a single vertex of
-// the dual mesh.
-struct HexTile
-{
-	HexTile( Imath::V3f p );	
-
-	// the position of the vert in the tile,
-	// and the center of the hex in space
-	Imath::V3f m_vertPos;		
-	Imath::V3f m_nrm;
-
-	// Terrain Type
-	enum {
-		Terrain_WATER,
-		Terrain_DESERT,
-		Terrain_GRASSLAND,
-		Terrain_FOREST,
-		Terrain_MOUNTAIN
-	};
-
-	int m_terrain;
-	
-	// Triangle that share this hex
-	std::vector<HexTri*> m_hextri;	
+enum class TerrainType : std::uint8_t {
+    Water,
+    Desert,
+    Grassland,
+    Forest,
+    Mountain,
 };
 
-// A hextri is an element of the dual
-// of the (mostly) hex tiling
-struct HexTri
-{
-	HexTri( size_t a, size_t b, size_t c );
-
-	// indices into the hex list
-	size_t m_hexA, m_hexB, m_hexC;
-	
-	// Connectivity, links to neighbors
-	// i.e. nbCA = neighbor across edge A<->C
-	HexTri *m_nbAB, *m_nbBC, *m_nbCA;
-
-	// Returns the center of the tri
-	Imath::V3f getCenter( const std::vector<HexTile> &hexes  );
-
-	// Temporaries that don't need to stick around	
-	union {
-		// Just used in the construction process
-		size_t m_newvert;
-
-		// angle around tile center
-		float m_angle;
-	} m_tmp;
-	
-
-	// Dbg color
-	//Imath::C4f m_dbgColor;
+struct HexTile {
+    Imath::V3f position;
+    Imath::V3f normal;
+    TerrainType terrain = TerrainType::Desert;
+    std::vector<std::size_t> incidentTriangles;
 };
 
-class HexPlanet
-{
+struct HexTriangle {
+    static constexpr std::size_t invalidIndex = std::numeric_limits<std::size_t>::max();
+
+    std::array<std::size_t, 3> vertices{};
+    std::array<std::size_t, 3> neighbors{
+        invalidIndex,
+        invalidIndex,
+        invalidIndex,
+    };
+    std::size_t subdivisionVertex = invalidIndex;
+};
+
+struct SurfaceOffset {
+    float value = 0.0f;
+};
+
+struct Ray {
+    Imath::V3f origin;
+    Imath::V3f direction;
+};
+
+struct SideConnectionCurve {
+    std::vector<Imath::V3f> points;
+    bool straight = false;
+};
+
+class HexPlanet {
 public:
-	HexPlanet( int subd_level, float trandom, float twatery );
+    struct Settings {
+        int subdivisionLevel = 4;
+        float terrainRandomness = 0.17f;
+        float waterProbability = 0.5f;
+        std::uint32_t randomSeed = 0;
+    };
 
-	enum {
-		DrawMode_CONSTRUCTION, // Show construction
-		DrawMode_TERRAIN,      // Terrain with no grid
-		DrawMode_TERRAINGRID,  // Terrain with grid
-	};
+    static constexpr float radius = 10.0f;
 
-	void draw( int draw_mode );
+    HexPlanet();
+    explicit HexPlanet(Settings settings);
 
-	size_t getNumHexes();
+    int subdivisionLevel() const noexcept;
+    std::size_t tileCount() const noexcept;
+    std::size_t triangleCount() const noexcept;
 
-	void subdivide( float trandom, float twatery );
+    const HexTile& tile(std::size_t index) const;
+    const HexTriangle& triangle(std::size_t index) const;
+    const std::vector<HexTile>& tiles() const noexcept;
+    const std::vector<HexTriangle>& triangles() const noexcept;
 
-	// returns the polygon representation of this
-	// hex. Usually 6-sided but could be a pentagon	
-	void getPolygon( HexTile &tile, std::vector<Imath::V3f> &poly, float offset=0.0f );
+    std::vector<Imath::V3f> polygon(
+        std::size_t tileIndex,
+        SurfaceOffset offset = SurfaceOffset{}) const;
+    Imath::V3f sideAnchor(
+        std::size_t tileIndex,
+        std::size_t side,
+        SurfaceOffset offset,
+        float centerInset = 0.1f) const;
+    SideConnectionCurve sideConnectionCurve(
+        std::size_t tileIndex,
+        std::size_t firstSide,
+        std::size_t secondSide,
+        SurfaceOffset offset,
+        float centerInset = 0.1f,
+        std::size_t segmentCount = 24) const;
+    std::vector<std::size_t> neighbors(std::size_t tileIndex) const;
+    std::size_t nearestTile(const Imath::V3f& surfaceDirection) const;
+    bool rayIntersection(const Ray& ray, Imath::V3f& result) const;
+    bool tileIntersection(
+        const Ray& ray,
+        std::size_t& tileIndex,
+        Imath::V3f& result,
+        SurfaceOffset offset = SurfaceOffset{1.0f}) const;
 
-	// returns the indices of the neighbors of this tile
-	// Usually 6, could be 5. These aren't in any order
-	void getNeighbors( size_t tileNdx, std::vector<size_t> &nbrs );
-	
-	// Returns a point on the planet's surface given a ray
-	bool rayHitPlanet( Imath::V3f p, Imath::V3f dir, Imath::V3f &result );
+private:
+    void buildLevelZero();
+    void subdivide();
+    void rebuildConnectivity();
+    void projectToSphere();
+    TerrainType randomTerrain();
+    Imath::V3f triangleCenter(const HexTriangle& triangle) const;
 
-	// Get a hex index from a 3d point .. projects the point
-	// down to the planet surface and returns the index of the
-	// hex containing it
-	size_t getHexIndexFromPoint( Imath::V3f surfPos );
-
-//protected:
-	int m_subdLevel;
-
-	// construction operations
-	void buildLevel0( float twatery );	
-	void projectToSphere();
-	void findNeighbors();
-	int getRandomTerrain( float twatery );
-
-	// data
-	std::vector<HexTile> m_hexes;
-	std::vector<HexTri> m_hexdual;
-
-	// static resources
-	static bool m_initStaticRes;
-	static GLuint g_texTemplate;
-	static GLuint g_texTileset;
-	static GLuint g_texTilesetGrid; // Tileset with outline
-
-	static float kPlanetRadius;
+    Settings settings_;
+    int subdivisionLevel_ = 0;
+    std::mt19937 random_;
+    std::vector<HexTile> tiles_;
+    std::vector<HexTriangle> triangles_;
 };
 
-#endif
+}  // namespace hexpuzzle

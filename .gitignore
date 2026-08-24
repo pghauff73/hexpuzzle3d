@@ -1,0 +1,8 @@
+.ourd-agent/
+build/
+__pycache__/
+*.py[cod]
+*.o
+*.d
+hexp_main
+hexpuzzle_core_tests
